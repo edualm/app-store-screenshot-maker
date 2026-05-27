@@ -43,6 +43,7 @@ type DevicePreset = {
   assetSize: { width: number; height: number };
   frameRect: Rect;
   screenMask: Rect & { radius: number };
+  screenshotTarget?: Rect;
   screenshotFit: ScreenshotFit;
 };
 
@@ -162,6 +163,7 @@ const PRESETS: Record<DeviceKey, DevicePreset> = {
     assetSize: { width: 3207, height: 1942 },
     frameRect: { x: 180, y: 330, width: 2200, height: 1332 },
     screenMask: { x: 325, y: 66, width: 2560, height: 1664, radius: 20 },
+    screenshotTarget: { x: 325, y: 98, width: 2560, height: 1600 },
     screenshotFit: "contain",
   },
   watch: {
@@ -691,7 +693,12 @@ function App() {
               disabled={!screenshot}
               onChange={(event) =>
                 setScreenshot((current) =>
-                  resizeScreenshot(current, Number(event.target.value)),
+                  resizeScreenshot(
+                    current,
+                    Number(event.target.value),
+                    preset,
+                    frame,
+                  ),
                 )
               }
             />
@@ -1136,16 +1143,29 @@ function transformFrameMask(
   preset: DevicePreset,
   frame: FrameState,
 ): Rect & { radius: number } {
-  const frameRect = preset.frameRect;
   const mask = preset.screenMask;
+  const rect = transformFrameRelativeRect(mask, preset, frame);
+  const scaleX = preset.frameRect.width / preset.assetSize.width;
+  const scaleY = preset.frameRect.height / preset.assetSize.height;
+  return {
+    ...rect,
+    radius: mask.radius * Math.min(scaleX, scaleY) * frame.scale,
+  };
+}
+
+function transformFrameRelativeRect(
+  rect: Rect,
+  preset: DevicePreset,
+  frame: FrameState,
+): Rect {
+  const frameRect = preset.frameRect;
   const scaleX = frameRect.width / preset.assetSize.width;
   const scaleY = frameRect.height / preset.assetSize.height;
   return {
-    x: frameRect.x + frame.x + mask.x * scaleX * frame.scale,
-    y: frameRect.y + frame.y + mask.y * scaleY * frame.scale,
-    width: mask.width * scaleX * frame.scale,
-    height: mask.height * scaleY * frame.scale,
-    radius: mask.radius * Math.min(scaleX, scaleY) * frame.scale,
+    x: frameRect.x + frame.x + rect.x * scaleX * frame.scale,
+    y: frameRect.y + frame.y + rect.y * scaleY * frame.scale,
+    width: rect.width * scaleX * frame.scale,
+    height: rect.height * scaleY * frame.scale,
   };
 }
 
@@ -1155,7 +1175,9 @@ function fitScreenshot(
   frame: FrameState,
 ): ImageLayer {
   const target = frame.enabled
-    ? transformFrameMask(preset, frame)
+    ? preset.screenshotTarget
+      ? transformFrameRelativeRect(preset.screenshotTarget, preset, frame)
+      : transformFrameMask(preset, frame)
     : {
         x: preset.width * 0.085,
         y: preset.height * 0.33,
@@ -1195,13 +1217,32 @@ function fitScreenshot(
 function resizeScreenshot(
   image: ImageLayer | null,
   scale: number,
+  preset: DevicePreset,
+  frame: FrameState,
 ): ImageLayer | null {
   if (!image) return null;
+  const width = image.naturalWidth * scale;
+  const height = image.naturalHeight * scale;
+  if (frame.enabled && preset.screenshotTarget) {
+    const target = transformFrameRelativeRect(
+      preset.screenshotTarget,
+      preset,
+      frame,
+    );
+    return {
+      ...image,
+      scale,
+      x: target.x + (target.width - width) / 2,
+      y: target.y + (target.height - height) / 2,
+      width,
+      height,
+    };
+  }
   return {
     ...image,
     scale,
-    width: image.naturalWidth * scale,
-    height: image.naturalHeight * scale,
+    width,
+    height,
   };
 }
 
