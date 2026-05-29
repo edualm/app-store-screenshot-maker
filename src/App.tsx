@@ -1,4 +1,11 @@
-import { ChangeEvent, PointerEvent, useMemo, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  PointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toPng } from "html-to-image";
 
 type DeviceKey = "iphone" | "ipadPortrait" | "ipadLandscape" | "mac" | "watch";
@@ -126,6 +133,16 @@ type SettingsFile = {
   screenshotScale: number | null;
   screenshotPlacement: ScreenshotPlacement | null;
   showMask: boolean;
+};
+
+type EditorSnapshot = Omit<SettingsFile, "version"> & {
+  screenshot: ImageLayer | null;
+};
+
+type HistoryEntry = {
+  id: number;
+  label: string;
+  snapshot: EditorSnapshot;
 };
 
 const PRESETS: Record<DeviceKey, DevicePreset> = {
@@ -267,6 +284,7 @@ const DEFAULT_TEXT: TextState = {
 };
 
 const SNAP_DISTANCE = 12;
+const HISTORY_LIMIT = 50;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -287,8 +305,11 @@ function App() {
     scale: 1,
   });
   const [showMask, setShowMask] = useState(false);
+  const [past, setPast] = useState<HistoryEntry[]>([]);
+  const [future, setFuture] = useState<HistoryEntry[]>([]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const historyIdRef = useRef(0);
 
   const preset = PRESETS[deviceKey];
   const previewScale = useMemo(
@@ -302,7 +323,132 @@ function App() {
   const stageBackground = getPreviewBackground(background);
   const gradientData = parseLinearGradient(background.gradient);
 
+  function getSnapshot(): EditorSnapshot {
+    return {
+      deviceKey,
+      background,
+      text,
+      frame,
+      screenshot,
+      screenshotScale,
+      screenshotPlacement,
+      showMask,
+    };
+  }
+
+  function restoreSnapshot(snapshot: EditorSnapshot) {
+    setDeviceKey(snapshot.deviceKey);
+    setBackground(snapshot.background);
+    setText(snapshot.text);
+    setFrame(snapshot.frame);
+    setScreenshot(snapshot.screenshot);
+    setScreenshotScale(snapshot.screenshotScale);
+    setScreenshotPlacement(snapshot.screenshotPlacement);
+    setShowMask(snapshot.showMask);
+    setDrag(null);
+  }
+
+  function createHistoryEntry(label: string, snapshot = getSnapshot()) {
+    historyIdRef.current += 1;
+    return { id: historyIdRef.current, label, snapshot };
+  }
+
+  function recordHistory(label: string) {
+    const entry = createHistoryEntry(label);
+    setPast((current) => [...current, entry].slice(-HISTORY_LIMIT));
+    setFuture([]);
+  }
+
+  function updateBackground(label: string, updates: Partial<BackgroundState>) {
+    recordHistory(label);
+    setBackground((current) => ({ ...current, ...updates }));
+  }
+
+  function updateFrame(label: string, updates: Partial<FrameState>) {
+    recordHistory(label);
+    setFrame((current) => ({ ...current, ...updates }));
+  }
+
+  function updateText(label: string, updates: Partial<TextState>) {
+    recordHistory(label);
+    setText((current) => ({ ...current, ...updates }));
+  }
+
+  function undo() {
+    const entry = past[past.length - 1];
+    if (!entry) return;
+    setPast((current) => current.slice(0, -1));
+    setFuture((current) => [
+      createHistoryEntry(entry.label, getSnapshot()),
+      ...current,
+    ].slice(0, HISTORY_LIMIT));
+    restoreSnapshot(entry.snapshot);
+  }
+
+  function redo() {
+    const entry = future[0];
+    if (!entry) return;
+    setFuture((current) => current.slice(1));
+    setPast((current) =>
+      [...current, createHistoryEntry(entry.label, getSnapshot())].slice(
+        -HISTORY_LIMIT,
+      ),
+    );
+    restoreSnapshot(entry.snapshot);
+  }
+
+  function jumpToPast(index: number) {
+    const entry = past[index];
+    if (!entry) return;
+    const skipped = past.slice(index + 1).reverse();
+    setPast(past.slice(0, index));
+    setFuture(
+      [
+        ...skipped.map((item) => createHistoryEntry(item.label, item.snapshot)),
+        createHistoryEntry(entry.label, getSnapshot()),
+        ...future,
+      ].slice(0, HISTORY_LIMIT),
+    );
+    restoreSnapshot(entry.snapshot);
+  }
+
+  function jumpToFuture(index: number) {
+    const entry = future[index];
+    if (!entry) return;
+    const skipped = future.slice(0, index);
+    setPast(
+      [
+        ...past,
+        createHistoryEntry(entry.label, getSnapshot()),
+        ...skipped
+          .slice()
+          .reverse()
+          .map((item) => createHistoryEntry(item.label, item.snapshot)),
+      ].slice(-HISTORY_LIMIT),
+    );
+    setFuture(future.slice(index + 1));
+    restoreSnapshot(entry.snapshot);
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const key = event.key.toLowerCase();
+      const isUndo = (event.metaKey || event.ctrlKey) && key === "z";
+      const isRedo =
+        ((event.metaKey || event.ctrlKey) && event.shiftKey && key === "z") ||
+        (event.ctrlKey && key === "y");
+      if (!isUndo && !isRedo) return;
+      event.preventDefault();
+      if (isRedo) redo();
+      else undo();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
+
   function resetForDevice(nextKey: DeviceKey) {
+    if (nextKey === deviceKey) return;
+    recordHistory(`Changed device to ${PRESETS[nextKey].label}`);
     const nextPreset = PRESETS[nextKey];
     setDeviceKey(nextKey);
     setFrame({ enabled: true, x: 0, y: 0, scale: 1 });
@@ -340,6 +486,7 @@ function App() {
 
   async function handleScreenshotFile(file: File) {
     const image = await readImageFile(file);
+    recordHistory("Uploaded screenshot");
     const fitted = fitScreenshot(image, preset, frame);
     setScreenshot(
       applyScreenshotLayout(
@@ -354,6 +501,7 @@ function App() {
 
   async function handleBackgroundFile(file: File) {
     const image = await readImageFile(file);
+    recordHistory("Uploaded background image");
     setBackground((current) => ({
       ...current,
       mode: "image",
@@ -362,6 +510,7 @@ function App() {
   }
 
   function updateGradientAngle(angle: number) {
+    recordHistory("Changed gradient angle");
     setBackground((current) => ({
       ...current,
       gradient: formatLinearGradient(angle, gradientData.stops),
@@ -372,6 +521,7 @@ function App() {
     index: number,
     updates: Partial<(typeof gradientData.stops)[number]>,
   ) {
+    recordHistory("Changed gradient color stop");
     setBackground((current) => ({
       ...current,
       gradient: formatLinearGradient(
@@ -384,6 +534,7 @@ function App() {
   }
 
   function addGradientStop() {
+    recordHistory("Added gradient color stop");
     setBackground((current) => ({
       ...current,
       gradient: formatLinearGradient(gradientData.angle, [
@@ -400,6 +551,7 @@ function App() {
 
   function removeGradientStop(index: number) {
     if (gradientData.stops.length <= 2) return;
+    recordHistory("Removed gradient color stop");
     setBackground((current) => ({
       ...current,
       gradient: formatLinearGradient(
@@ -420,6 +572,7 @@ function App() {
 
   function startDrag(layer: Layer, event: PointerEvent) {
     event.preventDefault();
+    recordHistory(`Moved ${layer}`);
     event.currentTarget.setPointerCapture(event.pointerId);
     const dragRect = getDragRect(
       layer,
@@ -605,6 +758,7 @@ function App() {
   async function importSettingsFile(file: File) {
     try {
       const imported = parseSettingsFile(await file.text());
+      recordHistory("Imported settings");
       setDeviceKey(imported.deviceKey);
       setBackground(imported.background);
       setText(imported.text);
@@ -627,6 +781,69 @@ function App() {
           <p className="eyebrow">Screenshot Maker</p>
           <h1>Compose export-ready app screenshots.</h1>
         </header>
+
+        <details className="panel history-panel" open>
+          <summary>
+            <h2>History</h2>
+          </summary>
+          <div className="history-actions">
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={undo}
+              disabled={!past.length}
+              title="Undo (Cmd/Ctrl+Z)"
+            >
+              Undo
+            </button>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={redo}
+              disabled={!future.length}
+              title="Redo (Cmd/Ctrl+Shift+Z or Ctrl+Y)"
+            >
+              Redo
+            </button>
+          </div>
+          <div className="history-list" aria-label="Undo history">
+            <p>Past</p>
+            {past.length ? (
+              past
+                .map((entry, index) => ({ entry, index }))
+                .reverse()
+                .map(({ entry, index }) => (
+                  <button
+                    type="button"
+                    className="history-item"
+                    key={entry.id}
+                    onClick={() => jumpToPast(index)}
+                  >
+                    {entry.label}
+                  </button>
+                ))
+            ) : (
+              <span className="history-empty">No actions yet.</span>
+            )}
+          </div>
+          <div className="history-list" aria-label="Redo history">
+            <p>Redo</p>
+            {future.length ? (
+              future.map((entry, index) => (
+                <button
+                  type="button"
+                  className="history-item redo-item"
+                  key={entry.id}
+                  onClick={() => jumpToFuture(index)}
+                >
+                  {entry.label}
+                </button>
+              ))
+            ) : (
+              <span className="history-empty">Nothing to redo.</span>
+            )}
+          </div>
+        </details>
 
         <details className="panel" open>
           <summary>
@@ -653,10 +870,9 @@ function App() {
               type="checkbox"
               checked={frame.enabled}
               onChange={(event) =>
-                setFrame((current) => ({
-                  ...current,
+                updateFrame("Toggled device frame", {
                   enabled: event.target.checked,
-                }))
+                })
               }
             />
             Show realistic device frame
@@ -665,7 +881,10 @@ function App() {
             <input
               type="checkbox"
               checked={showMask}
-              onChange={(event) => setShowMask(event.target.checked)}
+              onChange={(event) => {
+                recordHistory("Toggled screen mask");
+                setShowMask(event.target.checked);
+              }}
             />
             Show screen mask
           </label>
@@ -678,10 +897,9 @@ function App() {
               step="0.01"
               value={frame.scale}
               onChange={(event) =>
-                setFrame((current) => ({
-                  ...current,
+                updateFrame("Changed frame scale", {
                   scale: Number(event.target.value),
-                }))
+                })
               }
             />
           </label>
@@ -696,10 +914,9 @@ function App() {
             <select
               value={background.mode}
               onChange={(event) =>
-                setBackground((current) => ({
-                  ...current,
+                updateBackground("Changed background mode", {
                   mode: event.target.value as BackgroundMode,
-                }))
+                })
               }
             >
               <option value="solid">Solid color</option>
@@ -714,10 +931,9 @@ function App() {
                 type="color"
                 value={background.color}
                 onChange={(event) =>
-                  setBackground((current) => ({
-                    ...current,
+                  updateBackground("Changed background color", {
                     color: event.target.value,
-                  }))
+                  })
                 }
               />
             </label>
@@ -814,10 +1030,9 @@ function App() {
                 <select
                   value={background.imageFit}
                   onChange={(event) =>
-                    setBackground((current) => ({
-                      ...current,
+                    updateBackground("Changed background image fit", {
                       imageFit: event.target.value as BackgroundFit,
-                    }))
+                    })
                   }
                 >
                   <option value="cover">Cover</option>
@@ -854,6 +1069,7 @@ function App() {
               disabled={!screenshot}
               onChange={(event) => {
                 const nextScale = Number(event.target.value);
+                recordHistory("Changed screenshot scale");
                 setScreenshotScale(nextScale);
                 setScreenshot((current) => {
                   if (!current) return current;
@@ -870,15 +1086,16 @@ function App() {
           </label>
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
+              recordHistory("Fit screenshot");
               setScreenshot((current) => {
                 if (!current) return current;
                 const fitted = fitScreenshot(current, preset, frame);
                 setScreenshotScale(fitted.scale);
                 setScreenshotPlacement(null);
                 return fitted;
-              })
-            }
+              });
+            }}
             disabled={!screenshot}
           >
             Fit screenshot
@@ -895,10 +1112,9 @@ function App() {
               rows={4}
               value={text.content}
               onChange={(event) =>
-                setText((current) => ({
-                  ...current,
+                updateText("Changed overlay text", {
                   content: event.target.value,
-                }))
+                })
               }
             />
           </label>
@@ -908,10 +1124,9 @@ function App() {
               <select
                 value={text.fontFamily}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed text font", {
                     fontFamily: event.target.value as FontFamily,
-                  }))
+                  })
                 }
               >
                 {FONT_OPTIONS.map((font) => (
@@ -927,10 +1142,9 @@ function App() {
                 type="number"
                 value={text.fontSize}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed text size", {
                     fontSize: Number(event.target.value),
-                  }))
+                  })
                 }
               />
             </label>
@@ -945,10 +1159,9 @@ function App() {
                 step="0.01"
                 value={text.lineHeight}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed text line height", {
                     lineHeight: Number(event.target.value),
-                  }))
+                  })
                 }
               />
             </label>
@@ -960,10 +1173,9 @@ function App() {
                 step="1"
                 value={text.subtextGap}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed subtext gap", {
                     subtextGap: Number(event.target.value),
-                  }))
+                  })
                 }
               />
             </label>
@@ -975,10 +1187,9 @@ function App() {
                 type="color"
                 value={text.color}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed text color", {
                     color: event.target.value,
-                  }))
+                  })
                 }
               />
             </label>
@@ -988,10 +1199,9 @@ function App() {
                 type="color"
                 value={text.accent}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed accent color", {
                     accent: event.target.value,
-                  }))
+                  })
                 }
               />
             </label>
@@ -1002,10 +1212,9 @@ function App() {
               rows={3}
               value={text.subtextContent}
               onChange={(event) =>
-                setText((current) => ({
-                  ...current,
+                updateText("Changed subtext", {
                   subtextContent: event.target.value,
-                }))
+                })
               }
             />
           </label>
@@ -1015,10 +1224,9 @@ function App() {
               <select
                 value={text.subtextFontFamily}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed subtext font", {
                     subtextFontFamily: event.target.value as FontFamily,
-                  }))
+                  })
                 }
               >
                 {FONT_OPTIONS.map((font) => (
@@ -1034,10 +1242,9 @@ function App() {
                 type="number"
                 value={text.subtextFontSize}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed subtext size", {
                     subtextFontSize: Number(event.target.value),
-                  }))
+                  })
                 }
               />
             </label>
@@ -1052,10 +1259,9 @@ function App() {
                 step="0.01"
                 value={text.subtextLineHeight}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed subtext line height", {
                     subtextLineHeight: Number(event.target.value),
-                  }))
+                  })
                 }
               />
             </label>
@@ -1065,10 +1271,9 @@ function App() {
                 type="color"
                 value={text.subtextColor}
                 onChange={(event) =>
-                  setText((current) => ({
-                    ...current,
+                  updateText("Changed subtext color", {
                     subtextColor: event.target.value,
-                  }))
+                  })
                 }
               />
             </label>
@@ -1082,10 +1287,9 @@ function App() {
               step="1"
               value={text.width}
               onChange={(event) =>
-                setText((current) => ({
-                  ...current,
+                updateText("Changed text width", {
                   width: Number(event.target.value),
-                }))
+                })
               }
             />
           </label>
@@ -1094,10 +1298,9 @@ function App() {
             <select
               value={text.align}
               onChange={(event) =>
-                setText((current) => ({
-                  ...current,
+                updateText("Changed text alignment", {
                   align: event.target.value as CanvasTextAlign,
-                }))
+                })
               }
             >
               <option value="left">Left</option>

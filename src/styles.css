@@ -160,6 +160,51 @@ input[type="range"] {
   padding: 9px 10px;
 }
 
+.history-actions {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 14px;
+}
+
+.history-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.history-list p {
+  color: rgba(33, 24, 20, 0.54);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.history-item {
+  background: #fffaf5;
+  border: 1px solid rgba(46, 33, 24, 0.12);
+  color: #211814;
+  font-size: 12px;
+  justify-content: start;
+  min-height: 34px;
+  overflow: hidden;
+  padding: 8px 10px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.redo-item {
+  opacity: 0.72;
+}
+
+.history-empty {
+  color: rgba(33, 24, 20, 0.48);
+  font-size: 12px;
+}
+
 textarea {
   resize: vertical;
 }
