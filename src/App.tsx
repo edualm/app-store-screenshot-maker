@@ -156,9 +156,9 @@ const PRESETS: Record<DeviceKey, DevicePreset> = {
     width: 2732,
     height: 2048,
     frameSrc: "/frames/ipad-landscape.webp",
-    assetSize: { width: 1470, height: 1126 },
-    frameRect: { x: 360, y: 530, width: 2010, height: 1540 },
-    screenMask: { x: 46, y: 47, width: 1376, height: 1032, radius: 28 },
+    assetSize: { width: 1303, height: 928 },
+    frameRect: { x: 360, y: 520, width: 2010, height: 1432 },
+    screenMask: { x: 46, y: 47, width: 1212, height: 835, radius: 32 },
     screenshotFit: "exact",
   },
   mac: {
@@ -296,6 +296,7 @@ function App() {
   );
   const transformedFrameRect = transformFrameRect(preset.frameRect, frame);
   const transformedScreenRect = transformFrameMask(preset, frame);
+  const dropHintRect = getScreenshotTargetRect(preset, frame);
 
   const stageBackground = getPreviewBackground(background);
   const gradientData = parseLinearGradient(background.gradient);
@@ -1166,7 +1167,19 @@ function App() {
           {!screenshot ? (
             <div
               className="drop-hint"
-              style={{ transform: `scale(${previewScale})` }}
+              style={{
+                left: dropHintRect.x * previewScale,
+                top: dropHintRect.y * previewScale,
+                width: dropHintRect.width * previewScale,
+                height: dropHintRect.height * previewScale,
+                borderRadius:
+                  (dropHintRect.radius ?? 42) * previewScale,
+                fontSize: clamp(
+                  dropHintRect.width * previewScale * 0.052,
+                  12,
+                  38,
+                ),
+              }}
             >
               Drop a screenshot here
             </div>
@@ -1347,16 +1360,7 @@ function fitScreenshot(
   preset: DevicePreset,
   frame: FrameState,
 ): ImageLayer {
-  const target = frame.enabled
-    ? preset.screenshotTarget
-      ? transformFrameRelativeRect(preset.screenshotTarget, preset, frame)
-      : transformFrameMask(preset, frame)
-    : {
-        x: preset.width * 0.085,
-        y: preset.height * 0.33,
-        width: preset.width * 0.83,
-        height: preset.height * 0.58,
-      };
+  const target = getScreenshotTargetRect(preset, frame);
   if (frame.enabled && preset.screenshotFit === "exact") {
     return {
       ...image,
@@ -1384,6 +1388,24 @@ function fitScreenshot(
     y: target.y + (target.height - image.naturalHeight * scale) / 2,
     width: image.naturalWidth * scale,
     height: image.naturalHeight * scale,
+  };
+}
+
+function getScreenshotTargetRect(
+  preset: DevicePreset,
+  frame: FrameState,
+): Rect & { radius?: number } {
+  if (frame.enabled) {
+    return preset.screenshotTarget
+      ? transformFrameRelativeRect(preset.screenshotTarget, preset, frame)
+      : transformFrameMask(preset, frame);
+  }
+  return {
+    x: preset.width * 0.085,
+    y: preset.height * 0.33,
+    width: preset.width * 0.83,
+    height: preset.height * 0.58,
+    radius: 42,
   };
 }
 

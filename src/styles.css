@@ -271,17 +271,15 @@ textarea {
   border-radius: 42px;
   color: rgba(255, 255, 255, 0.86);
   display: flex;
-  font-size: 38px;
   font-weight: 900;
-  height: 420px;
   justify-content: center;
-  left: 50%;
   letter-spacing: -0.03em;
+  line-height: 1.05;
+  overflow: hidden;
+  padding: 18px;
   position: absolute;
-  top: 58%;
-  transform-origin: top left;
-  translate: -50% -50%;
-  width: 760px;
+  text-align: center;
+  z-index: 2;
 }
 
 .screen-clip,
