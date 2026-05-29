@@ -89,6 +89,40 @@ h2 {
   padding: 16px;
 }
 
+.panel summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+}
+
+.panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel summary::after {
+  border-bottom: 2px solid rgba(33, 24, 20, 0.56);
+  border-right: 2px solid rgba(33, 24, 20, 0.56);
+  content: "";
+  height: 8px;
+  transition: transform 160ms ease;
+  transform: rotate(45deg);
+  width: 8px;
+}
+
+.panel:not([open]) summary::after {
+  transform: rotate(-45deg);
+}
+
+.panel summary h2 {
+  margin: 0;
+}
+
+.panel[open] summary {
+  margin-bottom: 14px;
+}
+
 label {
   color: rgba(33, 24, 20, 0.72);
   display: grid;

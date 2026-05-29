@@ -639,8 +639,10 @@ function App() {
           <h1>Compose export-ready app screenshots.</h1>
         </header>
 
-        <section className="panel">
-          <h2>Device</h2>
+        <details className="panel" open>
+          <summary>
+            <h2>Device</h2>
+          </summary>
           <label>
             Preset
             <select
@@ -694,10 +696,12 @@ function App() {
               }
             />
           </label>
-        </section>
+        </details>
 
-        <section className="panel">
-          <h2>Background</h2>
+        <details className="panel" open>
+          <summary>
+            <h2>Background</h2>
+          </summary>
           <label>
             Mode
             <select
@@ -834,10 +838,12 @@ function App() {
               </label>
             </>
           ) : null}
-        </section>
+        </details>
 
-        <section className="panel">
-          <h2>Screenshot</h2>
+        <details className="panel" open>
+          <summary>
+            <h2>Screenshot</h2>
+          </summary>
           <label>
             Upload screenshot
             <input
@@ -888,10 +894,12 @@ function App() {
           >
             Fit screenshot
           </button>
-        </section>
+        </details>
 
-        <section className="panel">
-          <h2>Text</h2>
+        <details className="panel" open>
+          <summary>
+            <h2>Text</h2>
+          </summary>
           <label>
             Overlay text
             <textarea
@@ -1108,7 +1116,7 @@ function App() {
               <option value="right">Right</option>
             </select>
           </label>
-        </section>
+        </details>
 
         <div className="export-actions">
           <button
