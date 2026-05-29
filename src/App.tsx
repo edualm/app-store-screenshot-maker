@@ -1,4 +1,5 @@
 import { ChangeEvent, PointerEvent, useMemo, useRef, useState } from "react";
+import { toPng } from "html-to-image";
 
 type DeviceKey = "iphone" | "ipadPortrait" | "ipadLandscape" | "mac" | "watch";
 type BackgroundMode = "solid" | "gradient" | "image";
@@ -181,7 +182,7 @@ const PRESETS: Record<DeviceKey, DevicePreset> = {
     frameSrc: "/frames/watch.webp",
     assetSize: { width: 500, height: 780 },
     frameRect: { x: 41, y: -8, width: 340, height: 530 },
-    screenMask: { x: 63, y: 167, width: 374, height: 446, radius: 62 },
+    screenMask: { x: 62, y: 167, width: 376, height: 448, radius: 62 },
     screenshotFit: "cover",
   },
 };
@@ -478,7 +479,12 @@ function App() {
       const nextScreenshot = { ...screenshot, x: snapped.x, y: snapped.y };
       setScreenshot(nextScreenshot);
       setScreenshotPlacement(
-        getScreenshotPlacement(nextScreenshot, nextScreenshot.scale, preset, frame),
+        getScreenshotPlacement(
+          nextScreenshot,
+          nextScreenshot.scale,
+          preset,
+          frame,
+        ),
       );
     }
     if (drag.layer === "frame") {
@@ -557,28 +563,16 @@ function App() {
   }
 
   async function exportPng() {
-    const canvas = document.createElement("canvas");
-    canvas.width = preset.width;
-    canvas.height = preset.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    await drawBackground(ctx, preset, background);
-    if (screenshot)
-      await drawScreenshot(
-        ctx,
-        screenshot,
-        frame.enabled ? transformedScreenRect : null,
-        transformedScreenRect.radius,
-      );
-    if (frame.enabled)
-      await drawFrame(ctx, preset.frameSrc, transformedFrameRect);
     await waitForFonts();
-    await drawText(ctx, text);
+    const stage = stageRef.current;
+    if (!stage) return;
 
     const link = document.createElement("a");
     link.download = `screenshot-${preset.key}-${preset.width}x${preset.height}.png`;
-    link.href = canvas.toDataURL("image/png");
+    link.href = await toPng(stage, {
+      cacheBust: true,
+      pixelRatio: 1 / previewScale,
+    });
     link.click();
   }
 
@@ -593,12 +587,7 @@ function App() {
       screenshotPlacement:
         screenshotPlacement ??
         (screenshot
-          ? getScreenshotPlacement(
-              screenshot,
-              screenshot.scale,
-              preset,
-              frame,
-            )
+          ? getScreenshotPlacement(screenshot, screenshot.scale, preset, frame)
           : null),
       showMask,
     };
@@ -1180,8 +1169,7 @@ function App() {
                 top: dropHintRect.y * previewScale,
                 width: dropHintRect.width * previewScale,
                 height: dropHintRect.height * previewScale,
-                borderRadius:
-                  (dropHintRect.radius ?? 42) * previewScale,
+                borderRadius: (dropHintRect.radius ?? 42) * previewScale,
                 fontSize: clamp(
                   dropHintRect.width * previewScale * 0.052,
                   12,
@@ -1477,7 +1465,11 @@ function applyScreenshotPlacement(
   placement: ScreenshotPlacement | null,
 ) {
   return placement
-    ? { ...image, x: image.x + placement.offsetX, y: image.y + placement.offsetY }
+    ? {
+        ...image,
+        x: image.x + placement.offsetX,
+        y: image.y + placement.offsetY,
+      }
     : image;
 }
 
@@ -1487,7 +1479,12 @@ function getScreenshotPlacement(
   preset: DevicePreset,
   frame: FrameState,
 ): ScreenshotPlacement {
-  const fitted = applyScreenshotScale(fitScreenshot(image, preset, frame), scale, preset, frame);
+  const fitted = applyScreenshotScale(
+    fitScreenshot(image, preset, frame),
+    scale,
+    preset,
+    frame,
+  );
   return {
     offsetX: image.x - fitted.x,
     offsetY: image.y - fitted.y,
