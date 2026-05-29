@@ -42,14 +42,16 @@ button:disabled {
 .app {
   display: grid;
   grid-template-columns: minmax(320px, 390px) 1fr;
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar {
   background: #fff7ef;
   border-right: 1px solid rgba(46, 33, 24, 0.12);
   box-shadow: 18px 0 60px rgba(0, 0, 0, 0.18);
-  max-height: 100vh;
+  height: 100vh;
   overflow: auto;
   padding: 26px;
 }
@@ -296,6 +298,7 @@ textarea {
     #171413;
   display: grid;
   grid-template-rows: auto 1fr;
+  height: 100vh;
   min-width: 0;
   overflow: auto;
   padding: 28px;
@@ -315,6 +318,29 @@ textarea {
 
 .toolbar span {
   color: rgba(255, 247, 239, 0.68);
+}
+
+.zoom-controls {
+  align-items: center;
+  background: rgba(255, 247, 239, 0.12);
+  border: 1px solid rgba(255, 247, 239, 0.16);
+  border-radius: 999px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+}
+
+.zoom-controls button {
+  background: rgba(255, 247, 239, 0.12);
+  border-radius: 999px;
+  color: #fff7ef;
+  min-height: 32px;
+  min-width: 36px;
+  padding: 6px 10px;
+}
+
+.zoom-controls button:nth-child(2) {
+  min-width: 66px;
 }
 
 .stage {

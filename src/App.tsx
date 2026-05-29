@@ -149,8 +149,8 @@ const PRESETS: Record<DeviceKey, DevicePreset> = {
   iphone: {
     key: "iphone",
     label: "iPhone",
-    width: 1284,
-    height: 2778,
+    width: 1242,
+    height: 2688,
     frameSrc: "/frames/iphone.webp",
     assetSize: { width: 1470, height: 3000 },
     frameRect: { x: 172, y: 680, width: 940, height: 1918 },
@@ -164,8 +164,8 @@ const PRESETS: Record<DeviceKey, DevicePreset> = {
     height: 2732,
     frameSrc: "/frames/ipad.webp",
     assetSize: { width: 928, height: 1303 },
-    frameRect: { x: 392, y: 740, width: 1264, height: 1775 },
-    screenMask: { x: 46, y: 46, width: 835, height: 1212, radius: 32 },
+    frameRect: { x: 392, y: 740, width: 1200, height: 1775 },
+    screenMask: { x: 45, y: 45, width: 838, height: 1213, radius: 32 },
     screenshotFit: "exact",
   },
   ipadLandscape: {
@@ -285,6 +285,9 @@ const DEFAULT_TEXT: TextState = {
 
 const SNAP_DISTANCE = 12;
 const HISTORY_LIMIT = 50;
+const MIN_CANVAS_ZOOM = 0.25;
+const MAX_CANVAS_ZOOM = 3;
+const CANVAS_ZOOM_STEP = 0.1;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -308,6 +311,9 @@ function App() {
   const [past, setPast] = useState<HistoryEntry[]>([]);
   const [future, setFuture] = useState<HistoryEntry[]>([]);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [canvasZoom, setCanvasZoom] = useState(1);
+  const canvasZoomRef = useRef(1);
+  const workspaceRef = useRef<HTMLElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const historyIdRef = useRef(0);
 
@@ -316,6 +322,8 @@ function App() {
     () => Math.min(1, 780 / preset.width, 820 / preset.height),
     [preset.height, preset.width],
   );
+  const renderScale = previewScale * canvasZoom;
+  const zoomPercent = Math.round(canvasZoom * 100);
   const transformedFrameRect = transformFrameRect(preset.frameRect, frame);
   const transformedScreenRect = transformFrameMask(preset, frame);
   const dropHintRect = getScreenshotTargetRect(preset, frame);
@@ -378,10 +386,12 @@ function App() {
     const entry = past[past.length - 1];
     if (!entry) return;
     setPast((current) => current.slice(0, -1));
-    setFuture((current) => [
-      createHistoryEntry(entry.label, getSnapshot()),
-      ...current,
-    ].slice(0, HISTORY_LIMIT));
+    setFuture((current) =>
+      [createHistoryEntry(entry.label, getSnapshot()), ...current].slice(
+        0,
+        HISTORY_LIMIT,
+      ),
+    );
     restoreSnapshot(entry.snapshot);
   }
 
@@ -561,14 +571,66 @@ function App() {
     }));
   }
 
-  function getCanvasPoint(event: PointerEvent) {
-    const rect = stageRef.current?.getBoundingClientRect();
-    if (!rect) return { x: 0, y: 0 };
-    return {
-      x: (event.clientX - rect.left) / previewScale,
-      y: (event.clientY - rect.top) / previewScale,
-    };
+  function zoomCanvas(
+    nextZoom: number,
+    anchor?: { clientX: number; clientY: number },
+  ) {
+    const currentZoom = canvasZoomRef.current;
+    const currentRenderScale = previewScale * currentZoom;
+    const clampedZoom = clamp(nextZoom, MIN_CANVAS_ZOOM, MAX_CANVAS_ZOOM);
+    if (clampedZoom === currentZoom) return;
+
+    const workspace = workspaceRef.current;
+    const stage = stageRef.current;
+    const rect = stage?.getBoundingClientRect();
+    const canvasAnchor =
+      workspace && stage && rect && anchor
+        ? {
+            x: (anchor.clientX - rect.left) / currentRenderScale,
+            y: (anchor.clientY - rect.top) / currentRenderScale,
+            clientX: anchor.clientX,
+            clientY: anchor.clientY,
+          }
+        : null;
+
+    canvasZoomRef.current = clampedZoom;
+    setCanvasZoom(clampedZoom);
+
+    if (!canvasAnchor || !workspace || !stage) return;
+    requestAnimationFrame(() => {
+      const nextRect = stage.getBoundingClientRect();
+      const expectedLeft =
+        canvasAnchor.clientX - canvasAnchor.x * previewScale * clampedZoom;
+      const expectedTop =
+        canvasAnchor.clientY - canvasAnchor.y * previewScale * clampedZoom;
+      workspace.scrollLeft += nextRect.left - expectedLeft;
+      workspace.scrollTop += nextRect.top - expectedTop;
+    });
   }
+
+  function zoomBy(delta: number) {
+    zoomCanvas(Math.round((canvasZoomRef.current + delta) * 100) / 100);
+  }
+
+  function handleWorkspaceWheel(event: WheelEvent) {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const delta = -event.deltaY * (event.deltaMode === 1 ? 0.04 : 0.002);
+    zoomCanvas(canvasZoomRef.current * Math.exp(delta), {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+  }
+
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+
+    workspace.addEventListener("wheel", handleWorkspaceWheel, {
+      passive: false,
+    });
+    return () => workspace.removeEventListener("wheel", handleWorkspaceWheel);
+  });
 
   function startDrag(layer: Layer, event: PointerEvent) {
     event.preventDefault();
@@ -596,8 +658,8 @@ function App() {
 
   function continueDrag(event: PointerEvent) {
     if (!drag) return;
-    const dx = (event.clientX - drag.clientX) / previewScale;
-    const dy = (event.clientY - drag.clientY) / previewScale;
+    const dx = (event.clientX - drag.clientX) / renderScale;
+    const dy = (event.clientY - drag.clientY) / renderScale;
     let snapX = false;
     let snapY = false;
     if (drag.layer === "text") {
@@ -609,7 +671,7 @@ function App() {
           height: drag.height,
         },
         preset,
-        previewScale,
+        renderScale,
       );
       snapX = snapped.snapX;
       snapY = snapped.snapY;
@@ -625,7 +687,7 @@ function App() {
           height: getImageHeight(screenshot),
         },
         preset,
-        previewScale,
+        renderScale,
       );
       snapX = snapped.snapX;
       snapY = snapped.snapY;
@@ -649,7 +711,7 @@ function App() {
       const snapped = snapToCenter(
         transformFrameRect(preset.frameRect, nextFrame),
         preset,
-        previewScale,
+        renderScale,
       );
       const snappedFrame = {
         ...nextFrame,
@@ -682,8 +744,8 @@ function App() {
   ): Pick<Rect, "width" | "height"> {
     if (layer === "text")
       return {
-        width: fallbackRect.width / previewScale,
-        height: fallbackRect.height / previewScale,
+        width: fallbackRect.width / renderScale,
+        height: fallbackRect.height / renderScale,
       };
     if (layer === "screenshot" && screenshot)
       return {
@@ -696,8 +758,8 @@ function App() {
         height: transformedFrameRect.height,
       };
     return {
-      width: fallbackRect.width / previewScale,
-      height: fallbackRect.height / previewScale,
+      width: fallbackRect.width / renderScale,
+      height: fallbackRect.height / renderScale,
     };
   }
 
@@ -724,7 +786,11 @@ function App() {
     link.download = `screenshot-${preset.key}-${preset.width}x${preset.height}.png`;
     link.href = await toPng(stage, {
       cacheBust: true,
-      pixelRatio: 1 / previewScale,
+      width: preset.width * renderScale,
+      height: preset.height * renderScale,
+      canvasWidth: preset.width,
+      canvasHeight: preset.height,
+      pixelRatio: 1,
     });
     link.click();
   }
@@ -1334,20 +1400,41 @@ function App() {
         </div>
       </aside>
 
-      <section className="workspace">
+      <section ref={workspaceRef} className="workspace">
         <div className="toolbar">
           <strong>{preset.label}</strong>
           <span>
             {preset.width} x {preset.height}px
           </span>
           <span>Drag text, screenshot, or frame directly on the canvas.</span>
+          <div className="zoom-controls" aria-label="Canvas zoom controls">
+            <button
+              type="button"
+              onClick={() => zoomBy(-CANVAS_ZOOM_STEP)}
+              disabled={canvasZoom <= MIN_CANVAS_ZOOM}
+              aria-label="Zoom out"
+            >
+              -
+            </button>
+            <button type="button" onClick={() => zoomCanvas(1)}>
+              {zoomPercent}%
+            </button>
+            <button
+              type="button"
+              onClick={() => zoomBy(CANVAS_ZOOM_STEP)}
+              disabled={canvasZoom >= MAX_CANVAS_ZOOM}
+              aria-label="Zoom in"
+            >
+              +
+            </button>
+          </div>
         </div>
         <div
           ref={stageRef}
           className="stage"
           style={{
-            width: preset.width * previewScale,
-            height: preset.height * previewScale,
+            width: preset.width * renderScale,
+            height: preset.height * renderScale,
             background: stageBackground,
           }}
           onPointerMove={continueDrag}
@@ -1368,13 +1455,13 @@ function App() {
             <div
               className="drop-hint"
               style={{
-                left: dropHintRect.x * previewScale,
-                top: dropHintRect.y * previewScale,
-                width: dropHintRect.width * previewScale,
-                height: dropHintRect.height * previewScale,
-                borderRadius: (dropHintRect.radius ?? 42) * previewScale,
+                left: dropHintRect.x * renderScale,
+                top: dropHintRect.y * renderScale,
+                width: dropHintRect.width * renderScale,
+                height: dropHintRect.height * renderScale,
+                borderRadius: (dropHintRect.radius ?? 42) * renderScale,
                 fontSize: clamp(
-                  dropHintRect.width * previewScale * 0.052,
+                  dropHintRect.width * renderScale * 0.052,
                   12,
                   38,
                 ),
@@ -1389,11 +1476,11 @@ function App() {
             <div
               className="screen-clip"
               style={{
-                left: transformedScreenRect.x * previewScale,
-                top: transformedScreenRect.y * previewScale,
-                width: transformedScreenRect.width * previewScale,
-                height: transformedScreenRect.height * previewScale,
-                borderRadius: transformedScreenRect.radius * previewScale,
+                left: transformedScreenRect.x * renderScale,
+                top: transformedScreenRect.y * renderScale,
+                width: transformedScreenRect.width * renderScale,
+                height: transformedScreenRect.height * renderScale,
+                borderRadius: transformedScreenRect.radius * renderScale,
               }}
             >
               <img
@@ -1402,10 +1489,10 @@ function App() {
                 alt="Dropped screenshot"
                 draggable={false}
                 style={{
-                  left: (screenshot.x - transformedScreenRect.x) * previewScale,
-                  top: (screenshot.y - transformedScreenRect.y) * previewScale,
-                  width: getImageWidth(screenshot) * previewScale,
-                  height: getImageHeight(screenshot) * previewScale,
+                  left: (screenshot.x - transformedScreenRect.x) * renderScale,
+                  top: (screenshot.y - transformedScreenRect.y) * renderScale,
+                  width: getImageWidth(screenshot) * renderScale,
+                  height: getImageHeight(screenshot) * renderScale,
                 }}
                 onPointerDown={(event) => startDrag("screenshot", event)}
               />
@@ -1418,10 +1505,10 @@ function App() {
               alt="Dropped screenshot"
               draggable={false}
               style={{
-                left: screenshot.x * previewScale,
-                top: screenshot.y * previewScale,
-                width: getImageWidth(screenshot) * previewScale,
-                height: getImageHeight(screenshot) * previewScale,
+                left: screenshot.x * renderScale,
+                top: screenshot.y * renderScale,
+                width: getImageWidth(screenshot) * renderScale,
+                height: getImageHeight(screenshot) * renderScale,
               }}
               onPointerDown={(event) => startDrag("screenshot", event)}
             />
@@ -1433,10 +1520,10 @@ function App() {
               alt={`${preset.label} frame`}
               draggable={false}
               style={{
-                left: transformedFrameRect.x * previewScale,
-                top: transformedFrameRect.y * previewScale,
-                width: transformedFrameRect.width * previewScale,
-                height: transformedFrameRect.height * previewScale,
+                left: transformedFrameRect.x * renderScale,
+                top: transformedFrameRect.y * renderScale,
+                width: transformedFrameRect.width * renderScale,
+                height: transformedFrameRect.height * renderScale,
               }}
               onPointerDown={(event) => startDrag("frame", event)}
             />
@@ -1445,20 +1532,20 @@ function App() {
             <div
               className="mask-debug"
               style={{
-                left: transformedScreenRect.x * previewScale,
-                top: transformedScreenRect.y * previewScale,
-                width: transformedScreenRect.width * previewScale,
-                height: transformedScreenRect.height * previewScale,
-                borderRadius: transformedScreenRect.radius * previewScale,
+                left: transformedScreenRect.x * renderScale,
+                top: transformedScreenRect.y * renderScale,
+                width: transformedScreenRect.width * renderScale,
+                height: transformedScreenRect.height * renderScale,
+                borderRadius: transformedScreenRect.radius * renderScale,
               }}
             />
           ) : null}
           <div
             className="text-layer"
             style={{
-              left: text.x * previewScale,
-              top: text.y * previewScale,
-              width: text.width * previewScale,
+              left: text.x * renderScale,
+              top: text.y * renderScale,
+              width: text.width * renderScale,
               textAlign: text.align as "left" | "center" | "right",
             }}
             onPointerDown={(event) => startDrag("text", event)}
@@ -1468,9 +1555,9 @@ function App() {
               style={{
                 color: text.color,
                 fontFamily: getFontStack(text.fontFamily),
-                fontSize: text.fontSize * previewScale,
+                fontSize: text.fontSize * renderScale,
                 fontWeight: 800,
-                letterSpacing: `${-0.055 * text.fontSize * previewScale}px`,
+                letterSpacing: `${-0.055 * text.fontSize * renderScale}px`,
                 lineHeight: text.lineHeight,
               }}
             >
@@ -1482,11 +1569,11 @@ function App() {
                 style={{
                   color: text.subtextColor,
                   fontFamily: getFontStack(text.subtextFontFamily),
-                  fontSize: text.subtextFontSize * previewScale,
+                  fontSize: text.subtextFontSize * renderScale,
                   fontWeight: 700,
-                  letterSpacing: `${-0.025 * text.subtextFontSize * previewScale}px`,
+                  letterSpacing: `${-0.025 * text.subtextFontSize * renderScale}px`,
                   lineHeight: text.subtextLineHeight,
-                  marginTop: text.subtextGap * previewScale,
+                  marginTop: text.subtextGap * renderScale,
                 }}
               >
                 {renderRichText(text.subtextContent, text.accent)}
@@ -1508,8 +1595,8 @@ function transformFrameRect(rect: Rect, frame: FrameState): Rect {
   };
 }
 
-function snapToCenter(rect: Rect, preset: DevicePreset, previewScale: number) {
-  const threshold = SNAP_DISTANCE / previewScale;
+function snapToCenter(rect: Rect, preset: DevicePreset, renderScale: number) {
+  const threshold = SNAP_DISTANCE / renderScale;
   const centeredX = (preset.width - rect.width) / 2;
   const centeredY = (preset.height - rect.height) / 2;
   const snapX =
