@@ -6,7 +6,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { toPng } from "html-to-image";
+import { encode as encodePng } from "fast-png";
+import { toCanvas } from "html-to-image";
 
 type DeviceKey = "iphone" | "ipadPortrait" | "ipadLandscape" | "mac" | "watch";
 type BackgroundMode = "solid" | "gradient" | "image";
@@ -164,7 +165,7 @@ const PRESETS: Record<DeviceKey, DevicePreset> = {
     height: 2732,
     frameSrc: "/frames/ipad.webp",
     assetSize: { width: 928, height: 1303 },
-    frameRect: { x: 392, y: 740, width: 1200, height: 1775 },
+    frameRect: { x: 392, y: 740, width: 1350, height: 1775 },
     screenMask: { x: 45, y: 45, width: 838, height: 1213, radius: 32 },
     screenshotFit: "exact",
   },
@@ -324,9 +325,14 @@ function App() {
   );
   const renderScale = previewScale * canvasZoom;
   const zoomPercent = Math.round(canvasZoom * 100);
-  const transformedFrameRect = transformFrameRect(preset.frameRect, frame);
-  const transformedScreenRect = transformFrameMask(preset, frame);
-  const dropHintRect = getScreenshotTargetRect(preset, frame);
+  const effectiveFrameRect = getEffectiveFrameRect(preset, screenshot);
+  const transformedFrameRect = transformFrameRect(effectiveFrameRect, frame);
+  const transformedScreenRect = transformFrameMask(
+    preset,
+    frame,
+    effectiveFrameRect,
+  );
+  const dropHintRect = getScreenshotTargetRect(preset, frame, screenshot);
 
   const stageBackground = getPreviewBackground(background);
   const gradientData = parseLinearGradient(background.gradient);
@@ -709,14 +715,14 @@ function App() {
         y: drag.originY + dy,
       };
       const snapped = snapToCenter(
-        transformFrameRect(preset.frameRect, nextFrame),
+        transformFrameRect(effectiveFrameRect, nextFrame),
         preset,
         renderScale,
       );
       const snappedFrame = {
         ...nextFrame,
-        x: snapped.x - preset.frameRect.x,
-        y: snapped.y - preset.frameRect.y,
+        x: snapped.x - effectiveFrameRect.x,
+        y: snapped.y - effectiveFrameRect.y,
       };
       const appliedDx = snappedFrame.x - drag.originX;
       const appliedDy = snappedFrame.y - drag.originY;
@@ -784,7 +790,7 @@ function App() {
 
     const link = document.createElement("a");
     link.download = `screenshot-${preset.key}-${preset.width}x${preset.height}.png`;
-    link.href = await toPng(stage, {
+    const href = await toPngWithoutAlpha(stage, background.color, {
       cacheBust: true,
       width: preset.width * renderScale,
       height: preset.height * renderScale,
@@ -792,7 +798,9 @@ function App() {
       canvasHeight: preset.height,
       pixelRatio: 1,
     });
+    link.href = href;
     link.click();
+    URL.revokeObjectURL(href);
   }
 
   function exportSettings() {
@@ -1352,11 +1360,14 @@ function App() {
               max={preset.width}
               step="1"
               value={text.width}
-              onChange={(event) =>
+              onChange={(event) => {
+                const width = Number(event.target.value);
+                const centerX = text.x + text.width / 2;
                 updateText("Changed text width", {
-                  width: Number(event.target.value),
-                })
-              }
+                  x: clamp(centerX - width / 2, 0, preset.width - width),
+                  width,
+                });
+              }}
             />
           </label>
           <label>
@@ -1595,6 +1606,51 @@ function transformFrameRect(rect: Rect, frame: FrameState): Rect {
   };
 }
 
+function getEffectiveFrameRect(
+  preset: DevicePreset,
+  image: ImageLayer | null,
+): Rect {
+  if (!image || !isIpadPreset(preset)) return preset.frameRect;
+  const aspectRatio = image.naturalWidth / image.naturalHeight;
+  if (!Number.isFinite(aspectRatio) || aspectRatio <= 0)
+    return preset.frameRect;
+
+  const { frameRect, screenMask, assetSize } = preset;
+  const baseScaleX = frameRect.width / assetSize.width;
+  const baseScaleY = frameRect.height / assetSize.height;
+
+  if (preset.key === "ipadPortrait") {
+    const screenWidth = screenMask.width * baseScaleX;
+    const nextScreenHeight = screenWidth / aspectRatio;
+    const nextFrameHeight =
+      (nextScreenHeight * assetSize.height) / screenMask.height;
+    const maskCenterY = screenMask.y + screenMask.height / 2;
+    const baseScreenCenterY = frameRect.y + maskCenterY * baseScaleY;
+    const nextScaleY = nextFrameHeight / assetSize.height;
+    return {
+      ...frameRect,
+      y: baseScreenCenterY - maskCenterY * nextScaleY,
+      height: nextFrameHeight,
+    };
+  }
+
+  const screenHeight = screenMask.height * baseScaleY;
+  const nextScreenWidth = screenHeight * aspectRatio;
+  const nextFrameWidth = (nextScreenWidth * assetSize.width) / screenMask.width;
+  const maskCenterX = screenMask.x + screenMask.width / 2;
+  const baseScreenCenterX = frameRect.x + maskCenterX * baseScaleX;
+  const nextScaleX = nextFrameWidth / assetSize.width;
+  return {
+    ...frameRect,
+    x: baseScreenCenterX - maskCenterX * nextScaleX,
+    width: nextFrameWidth,
+  };
+}
+
+function isIpadPreset(preset: DevicePreset) {
+  return preset.key === "ipadPortrait" || preset.key === "ipadLandscape";
+}
+
 function snapToCenter(rect: Rect, preset: DevicePreset, renderScale: number) {
   const threshold = SNAP_DISTANCE / renderScale;
   const centeredX = (preset.width - rect.width) / 2;
@@ -1614,11 +1670,12 @@ function snapToCenter(rect: Rect, preset: DevicePreset, renderScale: number) {
 function transformFrameMask(
   preset: DevicePreset,
   frame: FrameState,
+  frameRect = preset.frameRect,
 ): Rect & { radius: number } {
   const mask = preset.screenMask;
-  const rect = transformFrameRelativeRect(mask, preset, frame);
-  const scaleX = preset.frameRect.width / preset.assetSize.width;
-  const scaleY = preset.frameRect.height / preset.assetSize.height;
+  const rect = transformFrameRelativeRect(mask, preset, frame, frameRect);
+  const scaleX = frameRect.width / preset.assetSize.width;
+  const scaleY = frameRect.height / preset.assetSize.height;
   return {
     ...rect,
     radius: mask.radius * Math.min(scaleX, scaleY) * frame.scale,
@@ -1629,8 +1686,8 @@ function transformFrameRelativeRect(
   rect: Rect,
   preset: DevicePreset,
   frame: FrameState,
+  frameRect = preset.frameRect,
 ): Rect {
-  const frameRect = preset.frameRect;
   const scaleX = frameRect.width / preset.assetSize.width;
   const scaleY = frameRect.height / preset.assetSize.height;
   return {
@@ -1646,15 +1703,18 @@ function fitScreenshot(
   preset: DevicePreset,
   frame: FrameState,
 ): ImageLayer {
-  const target = getScreenshotTargetRect(preset, frame);
+  const target = getScreenshotTargetRect(preset, frame, image);
   if (frame.enabled && preset.screenshotFit === "exact") {
+    const scale = target.width / image.naturalWidth;
+    const width = image.naturalWidth * scale;
+    const height = image.naturalHeight * scale;
     return {
       ...image,
-      scale: target.width / image.naturalWidth,
-      x: target.x,
-      y: target.y,
-      width: target.width,
-      height: target.height,
+      scale,
+      x: target.x + (target.width - width) / 2,
+      y: target.y + (target.height - height) / 2,
+      width,
+      height,
     };
   }
   const scale =
@@ -1680,11 +1740,18 @@ function fitScreenshot(
 function getScreenshotTargetRect(
   preset: DevicePreset,
   frame: FrameState,
+  image?: ImageLayer | null,
 ): Rect & { radius?: number } {
   if (frame.enabled) {
+    const frameRect = getEffectiveFrameRect(preset, image ?? null);
     return preset.screenshotTarget
-      ? transformFrameRelativeRect(preset.screenshotTarget, preset, frame)
-      : transformFrameMask(preset, frame);
+      ? transformFrameRelativeRect(
+          preset.screenshotTarget,
+          preset,
+          frame,
+          frameRect,
+        )
+      : transformFrameMask(preset, frame, frameRect);
   }
   return {
     x: preset.width * 0.085,
@@ -1705,10 +1772,12 @@ function resizeScreenshot(
   const width = image.naturalWidth * scale;
   const height = image.naturalHeight * scale;
   if (frame.enabled && preset.screenshotTarget) {
+    const frameRect = getEffectiveFrameRect(preset, image);
     const target = transformFrameRelativeRect(
       preset.screenshotTarget,
       preset,
       frame,
+      frameRect,
     );
     return {
       ...image,
@@ -2031,6 +2100,45 @@ function parseRichSegments(line: string) {
   }
   pushBuffer();
   return parts;
+}
+
+async function toPngWithoutAlpha(
+  node: HTMLElement,
+  fillColor: string,
+  options: Parameters<typeof toCanvas>[1],
+) {
+  const source = await toCanvas(node, options);
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Unable to prepare PNG export.");
+
+  ctx.fillStyle = fillColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, 0, 0);
+
+  const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const rgb = new Uint8Array(canvas.width * canvas.height * 3);
+  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < data.length; ) {
+    rgb[targetIndex++] = data[sourceIndex++];
+    rgb[targetIndex++] = data[sourceIndex++];
+    rgb[targetIndex++] = data[sourceIndex++];
+    sourceIndex += 1;
+  }
+
+  const png = encodePng({
+    width: canvas.width,
+    height: canvas.height,
+    data: rgb,
+    channels: 3,
+    depth: 8,
+  });
+  const pngBuffer = new ArrayBuffer(png.byteLength);
+  new Uint8Array(pngBuffer).set(png);
+
+  return URL.createObjectURL(new Blob([pngBuffer], { type: "image/png" }));
 }
 
 async function drawBackground(
