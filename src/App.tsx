@@ -58,6 +58,11 @@ type ImageLayer = {
   scale: number;
 };
 
+type ScreenshotPlacement = {
+  offsetX: number;
+  offsetY: number;
+};
+
 type BackgroundState = {
   mode: BackgroundMode;
   color: string;
@@ -117,6 +122,8 @@ type SettingsFile = {
   background: BackgroundState;
   text: TextState;
   frame: FrameState;
+  screenshotScale: number | null;
+  screenshotPlacement: ScreenshotPlacement | null;
   showMask: boolean;
 };
 
@@ -268,6 +275,9 @@ function App() {
   const [background, setBackground] =
     useState<BackgroundState>(DEFAULT_BACKGROUND);
   const [screenshot, setScreenshot] = useState<ImageLayer | null>(null);
+  const [screenshotScale, setScreenshotScale] = useState<number | null>(null);
+  const [screenshotPlacement, setScreenshotPlacement] =
+    useState<ScreenshotPlacement | null>(null);
   const [text, setText] = useState<TextState>(DEFAULT_TEXT);
   const [frame, setFrame] = useState<FrameState>({
     enabled: true,
@@ -288,6 +298,7 @@ function App() {
   const transformedScreenRect = transformFrameMask(preset, frame);
 
   const stageBackground = getPreviewBackground(background);
+  const gradientData = parseLinearGradient(background.gradient);
 
   function resetForDevice(nextKey: DeviceKey) {
     const nextPreset = PRESETS[nextKey];
@@ -304,19 +315,39 @@ function App() {
     }));
     setScreenshot((current) =>
       current
-        ? fitScreenshot(current, nextPreset, {
-            enabled: true,
-            x: 0,
-            y: 0,
-            scale: 1,
-          })
+        ? applyScreenshotLayout(
+            fitScreenshot(current, nextPreset, {
+              enabled: true,
+              x: 0,
+              y: 0,
+              scale: 1,
+            }),
+            screenshotScale,
+            screenshotPlacement,
+            nextPreset,
+            {
+              enabled: true,
+              x: 0,
+              y: 0,
+              scale: 1,
+            },
+          )
         : null,
     );
   }
 
   async function handleScreenshotFile(file: File) {
     const image = await readImageFile(file);
-    setScreenshot(fitScreenshot(image, preset, frame));
+    const fitted = fitScreenshot(image, preset, frame);
+    setScreenshot(
+      applyScreenshotLayout(
+        fitted,
+        screenshotScale,
+        screenshotPlacement,
+        preset,
+        frame,
+      ),
+    );
   }
 
   async function handleBackgroundFile(file: File) {
@@ -325,6 +356,54 @@ function App() {
       ...current,
       mode: "image",
       imageSrc: image.src,
+    }));
+  }
+
+  function updateGradientAngle(angle: number) {
+    setBackground((current) => ({
+      ...current,
+      gradient: formatLinearGradient(angle, gradientData.stops),
+    }));
+  }
+
+  function updateGradientStop(
+    index: number,
+    updates: Partial<(typeof gradientData.stops)[number]>,
+  ) {
+    setBackground((current) => ({
+      ...current,
+      gradient: formatLinearGradient(
+        gradientData.angle,
+        gradientData.stops.map((stop, stopIndex) =>
+          stopIndex === index ? { ...stop, ...updates } : stop,
+        ),
+      ),
+    }));
+  }
+
+  function addGradientStop() {
+    setBackground((current) => ({
+      ...current,
+      gradient: formatLinearGradient(gradientData.angle, [
+        ...gradientData.stops,
+        {
+          color:
+            gradientData.stops[gradientData.stops.length - 1]?.color ??
+            "#ffffff",
+          offset: 1,
+        },
+      ]),
+    }));
+  }
+
+  function removeGradientStop(index: number) {
+    if (gradientData.stops.length <= 2) return;
+    setBackground((current) => ({
+      ...current,
+      gradient: formatLinearGradient(
+        gradientData.angle,
+        gradientData.stops.filter((_, stopIndex) => stopIndex !== index),
+      ),
     }));
   }
 
@@ -395,7 +474,11 @@ function App() {
       );
       snapX = snapped.snapX;
       snapY = snapped.snapY;
-      setScreenshot({ ...screenshot, x: snapped.x, y: snapped.y });
+      const nextScreenshot = { ...screenshot, x: snapped.x, y: snapped.y };
+      setScreenshot(nextScreenshot);
+      setScreenshotPlacement(
+        getScreenshotPlacement(nextScreenshot, nextScreenshot.scale, preset, frame),
+      );
     }
     if (drag.layer === "frame") {
       const nextFrame = {
@@ -505,6 +588,17 @@ function App() {
       background,
       text,
       frame,
+      screenshotScale: screenshotScale ?? screenshot?.scale ?? null,
+      screenshotPlacement:
+        screenshotPlacement ??
+        (screenshot
+          ? getScreenshotPlacement(
+              screenshot,
+              screenshot.scale,
+              preset,
+              frame,
+            )
+          : null),
       showMask,
     };
     const blob = new Blob([JSON.stringify(settings, null, 2)], {
@@ -525,6 +619,8 @@ function App() {
       setBackground(imported.background);
       setText(imported.text);
       setFrame(imported.frame);
+      setScreenshotScale(imported.screenshotScale);
+      setScreenshotPlacement(imported.screenshotPlacement);
       setShowMask(imported.showMask);
       setScreenshot(null);
     } catch (error) {
@@ -617,57 +713,126 @@ function App() {
               <option value="image">Image</option>
             </select>
           </label>
-          <label>
-            Solid color
-            <input
-              type="color"
-              value={background.color}
-              onChange={(event) =>
-                setBackground((current) => ({
-                  ...current,
-                  color: event.target.value,
-                }))
-              }
-            />
-          </label>
-          <label>
-            Gradient
-            <input
-              value={background.gradient}
-              onChange={(event) =>
-                setBackground((current) => ({
-                  ...current,
-                  gradient: event.target.value,
-                }))
-              }
-            />
-          </label>
-          <label>
-            Background image
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(event) =>
-                void handleFileInput(event, handleBackgroundFile)
-              }
-            />
-          </label>
-          <label>
-            Image fit
-            <select
-              value={background.imageFit}
-              onChange={(event) =>
-                setBackground((current) => ({
-                  ...current,
-                  imageFit: event.target.value as BackgroundFit,
-                }))
-              }
-            >
-              <option value="cover">Cover</option>
-              <option value="contain">Contain</option>
-              <option value="stretch">Stretch</option>
-            </select>
-          </label>
+          {background.mode === "solid" ? (
+            <label>
+              Solid color
+              <input
+                type="color"
+                value={background.color}
+                onChange={(event) =>
+                  setBackground((current) => ({
+                    ...current,
+                    color: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          ) : null}
+          {background.mode === "gradient" ? (
+            <div className="gradient-picker">
+              <div
+                className="gradient-preview"
+                style={{ background: background.gradient }}
+                aria-label="Gradient preview"
+              />
+              <label>
+                Angle
+                <input
+                  type="range"
+                  min="0"
+                  max="360"
+                  value={gradientData.angle}
+                  onChange={(event) =>
+                    updateGradientAngle(Number(event.target.value))
+                  }
+                />
+              </label>
+              <input
+                className="gradient-angle-input"
+                type="number"
+                min="0"
+                max="360"
+                value={Math.round(gradientData.angle)}
+                onChange={(event) =>
+                  updateGradientAngle(clamp(Number(event.target.value), 0, 360))
+                }
+                aria-label="Gradient angle in degrees"
+              />
+              {gradientData.stops.map((stop, index) => (
+                <div className="gradient-stop" key={index}>
+                  <label>
+                    Color {index + 1}
+                    <input
+                      type="color"
+                      value={toHexColor(stop.color)}
+                      onChange={(event) =>
+                        updateGradientStop(index, { color: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Position
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={Math.round(stop.offset * 100)}
+                      onChange={(event) =>
+                        updateGradientStop(index, {
+                          offset: Number(event.target.value) / 100,
+                        })
+                      }
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={gradientData.stops.length <= 2}
+                    onClick={() => removeGradientStop(index)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={addGradientStop}
+              >
+                Add color stop
+              </button>
+            </div>
+          ) : null}
+          {background.mode === "image" ? (
+            <>
+              <label>
+                Background image
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) =>
+                    void handleFileInput(event, handleBackgroundFile)
+                  }
+                />
+              </label>
+              <label>
+                Image fit
+                <select
+                  value={background.imageFit}
+                  onChange={(event) =>
+                    setBackground((current) => ({
+                      ...current,
+                      imageFit: event.target.value as BackgroundFit,
+                    }))
+                  }
+                >
+                  <option value="cover">Cover</option>
+                  <option value="contain">Contain</option>
+                  <option value="stretch">Stretch</option>
+                </select>
+              </label>
+            </>
+          ) : null}
         </section>
 
         <section className="panel">
@@ -689,26 +854,34 @@ function App() {
               min="0.2"
               max="3"
               step="0.01"
-              value={screenshot?.scale ?? 1}
+              value={screenshot?.scale ?? screenshotScale ?? 1}
               disabled={!screenshot}
-              onChange={(event) =>
-                setScreenshot((current) =>
-                  resizeScreenshot(
-                    current,
-                    Number(event.target.value),
+              onChange={(event) => {
+                const nextScale = Number(event.target.value);
+                setScreenshotScale(nextScale);
+                setScreenshot((current) => {
+                  if (!current) return current;
+                  return applyScreenshotLayout(
+                    fitScreenshot(current, preset, frame),
+                    nextScale,
+                    screenshotPlacement,
                     preset,
                     frame,
-                  ),
-                )
-              }
+                  );
+                });
+              }}
             />
           </label>
           <button
             type="button"
             onClick={() =>
-              setScreenshot((current) =>
-                current ? fitScreenshot(current, preset, frame) : current,
-              )
+              setScreenshot((current) => {
+                if (!current) return current;
+                const fitted = fitScreenshot(current, preset, frame);
+                setScreenshotScale(fitted.scale);
+                setScreenshotPlacement(null);
+                return fitted;
+              })
             }
             disabled={!screenshot}
           >
@@ -1246,6 +1419,51 @@ function resizeScreenshot(
   };
 }
 
+function applyScreenshotScale(
+  image: ImageLayer,
+  scale: number | null,
+  preset: DevicePreset,
+  frame: FrameState,
+) {
+  if (scale === null) return image;
+  return resizeScreenshot(image, scale, preset, frame) ?? image;
+}
+
+function applyScreenshotLayout(
+  image: ImageLayer,
+  scale: number | null,
+  placement: ScreenshotPlacement | null,
+  preset: DevicePreset,
+  frame: FrameState,
+) {
+  return applyScreenshotPlacement(
+    applyScreenshotScale(image, scale, preset, frame),
+    placement,
+  );
+}
+
+function applyScreenshotPlacement(
+  image: ImageLayer,
+  placement: ScreenshotPlacement | null,
+) {
+  return placement
+    ? { ...image, x: image.x + placement.offsetX, y: image.y + placement.offsetY }
+    : image;
+}
+
+function getScreenshotPlacement(
+  image: ImageLayer,
+  scale: number,
+  preset: DevicePreset,
+  frame: FrameState,
+): ScreenshotPlacement {
+  const fitted = applyScreenshotScale(fitScreenshot(image, preset, frame), scale, preset, frame);
+  return {
+    offsetX: image.x - fitted.x,
+    offsetY: image.y - fitted.y,
+  };
+}
+
 function getImageWidth(image: ImageLayer) {
   return image.width ?? image.naturalWidth * image.scale;
 }
@@ -1277,9 +1495,26 @@ function parseSettingsFile(value: string): SettingsFile {
   if (!text) throw new Error("Settings file has invalid text settings.");
   if (!isFrameState(settings.frame))
     throw new Error("Settings file has invalid frame settings.");
+  if (
+    settings.screenshotScale !== undefined &&
+    settings.screenshotScale !== null &&
+    typeof settings.screenshotScale !== "number"
+  )
+    throw new Error("Settings file has invalid screenshot scale settings.");
+  if (
+    settings.screenshotPlacement !== undefined &&
+    settings.screenshotPlacement !== null &&
+    !isScreenshotPlacement(settings.screenshotPlacement)
+  )
+    throw new Error("Settings file has invalid screenshot placement settings.");
   if (typeof settings.showMask !== "boolean")
     throw new Error("Settings file has invalid mask settings.");
-  return { ...(settings as SettingsFile), text };
+  return {
+    ...settings,
+    text,
+    screenshotScale: settings.screenshotScale ?? null,
+    screenshotPlacement: settings.screenshotPlacement ?? null,
+  } as SettingsFile;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1307,6 +1542,11 @@ function isBackgroundMode(value: unknown): value is BackgroundMode {
 
 function isBackgroundFit(value: unknown): value is BackgroundFit {
   return value === "cover" || value === "contain" || value === "stretch";
+}
+
+function isScreenshotPlacement(value: unknown): value is ScreenshotPlacement {
+  if (!isRecord(value)) return false;
+  return typeof value.offsetX === "number" && typeof value.offsetY === "number";
 }
 
 function normalizeTextState(value: unknown): TextState | null {
@@ -1699,6 +1939,28 @@ function parseLinearGradient(value: string) {
             { color: "#7f6dff", offset: 1 },
           ],
   };
+}
+
+function formatLinearGradient(
+  angle: number,
+  stops: ReturnType<typeof parseLinearGradient>["stops"],
+) {
+  const sortedStops = [...stops].sort((a, b) => a.offset - b.offset);
+  return `linear-gradient(${Math.round(angle)}deg, ${sortedStops
+    .map((stop) => `${stop.color} ${Math.round(stop.offset * 100)}%`)
+    .join(", ")})`;
+}
+
+function toHexColor(value: string) {
+  if (/^#[0-9a-fA-F]{6}$/.test(value)) return value;
+  if (/^#[0-9a-fA-F]{3}$/.test(value)) {
+    return `#${value
+      .slice(1)
+      .split("")
+      .map((char) => `${char}${char}`)
+      .join("")}`;
+  }
+  return "#ffffff";
 }
 
 function splitGradientParts(value: string) {

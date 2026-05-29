@@ -119,6 +119,13 @@ input[type="range"] {
   padding: 0;
 }
 
+.ghost-button {
+  background: rgba(41, 33, 31, 0.08);
+  color: #211814;
+  min-height: 38px;
+  padding: 9px 10px;
+}
+
 textarea {
   resize: vertical;
 }
@@ -138,6 +145,32 @@ textarea {
   display: grid;
   gap: 10px;
   grid-template-columns: 1fr 1fr;
+}
+
+.gradient-picker {
+  display: grid;
+  gap: 12px;
+}
+
+.gradient-preview {
+  border: 1px solid rgba(46, 33, 24, 0.16);
+  border-radius: 14px;
+  min-height: 58px;
+}
+
+.gradient-angle-input {
+  margin-top: -12px;
+}
+
+.gradient-stop {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 66px 1fr auto;
+}
+
+.gradient-stop label {
+  margin-bottom: 0;
 }
 
 .export-actions {
